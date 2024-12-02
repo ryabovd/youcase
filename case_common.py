@@ -54,13 +54,51 @@ def get_session():
     return s
 
 
+def get_data_from_content(content):
+    case_info = {}
+    sub_category, instance = get_case_title(content)
+    case_number, material_number = get_case_number(content)
+    tab_case = get_tab_case(content)
+    return case_info
+
+
+def get_case_title(content):
+    category = content.find('div', class_ = 'title').get_text()
+    sub_category, instance = category.split('-')
+    sub_category, instance = sub_category.strip(), instance.strip()
+    return sub_category, instance
+
+
+def get_case_number(content):
+    casenumber = content.find('div', class_ = 'casenumber').get_text().strip()
+    print(casenumber)
+    sym_N_position = casenumber.find('№')
+    sym_Tilda_position = casenumber.find('~')
+    case_number = casenumber[sym_N_position+1:sym_Tilda_position].strip()
+    material_number = casenumber[sym_Tilda_position+1:].strip()
+    print(case_number)
+    print(material_number)
+    return case_number, material_number
+
+
+def get_tab_case(content):
+    tab_1_case = content.find('div', id = 'cont1')
+    print(tab_1_case)
+    tab_2_case_flow = content.find('div', id = 'cont2')
+    print(tab_2_case_flow)
+    tab_3_litigants = content.find('div', id = 'cont3')
+    print(tab_3_litigants)
+    pass
+
+
+
 def main():
     content = getContent(url)
     if content == None:
             print('Content could not be found')
     else:
         print(content)
-    pass
+        get_data_from_content(content)
 
 
 if __name__ == __name__:
