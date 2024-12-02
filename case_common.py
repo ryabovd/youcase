@@ -13,6 +13,7 @@ url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_
 https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005#
 https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005#
 """
+# url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
 
 
 def getContent(url):
@@ -54,11 +55,11 @@ def get_session():
     return s
 
 
-def get_data_from_content(content):
+def get_data_from_content(content, link_start):
     case_info = {}
     sub_category, instance = get_case_title(content)
     case_number, material_number = get_case_number(content)
-    tab_case = get_tab_case(content)
+    tab_case = get_tab_case(content, link_start)
     return case_info
 
 
@@ -81,24 +82,53 @@ def get_case_number(content):
     return case_number, material_number
 
 
-def get_tab_case(content):
+def get_tab_case(content, link_start):
     tab_1_case = content.find('div', id = 'cont1')
-    print(tab_1_case)
+    print(tab_1_case, '\n')
+    parse_tab_1_case(tab_1_case, link_start)
     tab_2_case_flow = content.find('div', id = 'cont2')
-    print(tab_2_case_flow)
+    print(tab_2_case_flow, '\n')
     tab_3_litigants = content.find('div', id = 'cont3')
-    print(tab_3_litigants)
+    print(tab_3_litigants, '\n')
+
+
+def parse_tab_1_case(tab_1_case, link_start):
+    uid = tab_1_case.find('u').get_text()
+    print('uid', uid)
+    tab_uid_link = tab_1_case.find('a').get('href')
+    uid_link = build_uid_link(tab_uid_link, link_start)
+    print('uid_link', uid_link)
+    date_of_receipt = tab_1_case.find('b', string='Дата поступления').find_next('td').get_text()
+    print(date_of_receipt)
+    сategory_of_case = 0
+    judge = 0	
+    date_of_consideration = 0	
+    result_of_consideration	= 0
+    indication_of_consideration_of_the_case = 0
+    court_composition = 0
     pass
 
+
+def build_link_start(url):
+    slash_position = url.find('/modules')
+    link_start = url[:slash_position]
+    # print('\n', link_start, '\n')
+    return link_start
+
+
+def build_uid_link(tab_uid_link, link_start):
+    return link_start + tab_uid_link
 
 
 def main():
     content = getContent(url)
+    
     if content == None:
             print('Content could not be found')
     else:
-        print(content)
-        get_data_from_content(content)
+        #print(content, '\n')
+        link_start = build_link_start(url)
+        get_data_from_content(content, link_start)
 
 
 if __name__ == __name__:
