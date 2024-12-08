@@ -58,8 +58,10 @@ def get_session():
 def get_data_from_content(content, link_start):
     case_info = {}
     sub_category, instance = get_case_title(content)
+    print('sub_category, instance', sub_category, instance)
     case_number, material_number = get_case_number(content)
-    tab_case = get_tab_case(content, link_start)
+    print('case_number, material_number', case_number, material_number)
+    tabs_case = get_tabs_case(content, link_start)
     return case_info
 
 
@@ -82,17 +84,28 @@ def get_case_number(content):
     return case_number, material_number
 
 
-def get_tab_case(content, link_start):
-    tab_1_case = content.find('div', id = 'cont1')
-    print(tab_1_case, '\n')
-    parse_tab_1_case(tab_1_case, link_start)
-    tab_2_case_flow = content.find('div', id = 'cont2')
-    print(tab_2_case_flow, '\n')
-    tab_3_litigants = content.find('div', id = 'cont3')
-    print(tab_3_litigants, '\n')
+def get_tabs_case(content, link_start):
+    # print(type(content))
+    quantity_tabs = len(content.ul.find_all('li'))
+    print('TABS =', quantity_tabs)
+    tabs = {}
+    for tab in range(1, quantity_tabs+1):
+        # print('TAB' + str(tab))
+        tab_content = content.find('div', id = 'cont' + str(tab))
+        tabs[str(tab)] = tab_content
+    for tab in tabs:
+        print(tabs[tab], '\n')
+
+    # tab1_case = content.find('div', id = 'cont1')
+    # print(tab1_case, '\n')
+    # parse_tab1_case(tab1_case, link_start)
+    # tab2_case_flow = content.find('div', id = 'cont2')
+    # print(tab2_case_flow, '\n')
+    # tab3_litigants = content.find('div', id = 'cont3')
+    # print(tab3_litigants, '\n')
 
 
-def parse_tab_1_case(tab_1_case, link_start):
+def parse_tab1_case(tab_1_case, link_start):
     uid = tab_1_case.find('u').get_text()
     print('uid', uid)
     tab_uid_link = tab_1_case.find('a').get('href')
