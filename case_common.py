@@ -157,6 +157,23 @@ def main():
                 uid_link = case_info[el].find('a').get('href')
                 print(uid)
                 print(link_start + uid_link)
+            if el == '2':
+                # print(case_info[el])
+                # title = case_info[el].find('th').get_text()
+                # print(title)
+                case_moving = case_info[el].find_all('tr')
+                title = case_moving[0].find('th').get_text()
+                print(title)
+                case_moving = case_moving[1:]
+                # list_events = []
+                events = case_moving[0].find_all('b')
+                last_row = case_moving[-1].get_text()
+                print(last_row)
+                # for el in range(len(events)):
+                #     print(events[el], last_row[el])
+                    # ev = list_events.append(el.get_text())
+                    # print(ev)
+
 
 
 if __name__ == __name__:
