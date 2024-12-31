@@ -6,7 +6,9 @@ import requests
 #import json
 
 
-url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
+url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69822478&case_uid=d51c698f-d910-449a-98f7-ed590d51a5b4&delo_id=1540005'
+#url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=76859064&case_uid=a9bdaa36-ea3e-42b1-8353-b61e621a0814&delo_id=1540005'
+# url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
 # url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005'
 # url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005'
 """
@@ -58,11 +60,13 @@ def get_session():
 def get_data_from_content(content, link_start):
     case_info = {}
     sub_category, instance = get_case_title(content)
-    print('sub_category, instance', sub_category, instance)
+    # print('sub_category, instance, Категория, Инстанция', sub_category, instance)
     case_number, material_number = get_case_number(content)
-    print('case_number, material_number', case_number, material_number)
+    # print('case_number, material_number, Номер дела, номер материала', case_number, material_number)
     tabs_case = get_tabs_case(content, link_start)
-    return case_info
+    case_info = tabs_case
+    # print(case_info)
+    return sub_category, instance, case_number, material_number, case_info
 
 
 def get_case_title(content):
@@ -74,13 +78,13 @@ def get_case_title(content):
 
 def get_case_number(content):
     casenumber = content.find('div', class_ = 'casenumber').get_text().strip()
-    print(casenumber)
+    # print(casenumber)
     sym_N_position = casenumber.find('№')
     sym_Tilda_position = casenumber.find('~')
     case_number = casenumber[sym_N_position+1:sym_Tilda_position].strip()
     material_number = casenumber[sym_Tilda_position+1:].strip()
-    print(case_number)
-    print(material_number)
+    # print(case_number)
+    # print(material_number)
     return case_number, material_number
 
 
@@ -94,7 +98,9 @@ def get_tabs_case(content, link_start):
         tab_content = content.find('div', id = 'cont' + str(tab))
         tabs[str(tab)] = tab_content
     for tab in tabs:
-        print(tabs[tab], '\n')
+        #print(tabs[tab], '\n')
+        pass
+    return tabs
 
     # tab1_case = content.find('div', id = 'cont1')
     # print(tab1_case, '\n')
@@ -141,7 +147,11 @@ def main():
     else:
         #print(content, '\n')
         link_start = build_link_start(url)
-        get_data_from_content(content, link_start)
+        sub_category, instance, case_number, material_number, case_info = get_data_from_content(content, link_start)
+        print(sub_category, instance, case_number, material_number, sep='\n')
+        for el in case_info.keys():
+            print('Вкладка', el)
+            # print(case_info[el])
 
 
 if __name__ == __name__:
