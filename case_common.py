@@ -151,7 +151,12 @@ def main():
         print(sub_category, instance, case_number, material_number, sep='\n')
         for el in case_info.keys():
             print('Вкладка', el)
-            # print(case_info[el])
+            if el == '1':
+                # print(case_info[el])
+                uid = case_info[el].find('a').get_text()
+                uid_link = case_info[el].find('a').get('href')
+                print(uid)
+                print(link_start + uid_link)
 
 
 if __name__ == __name__:
