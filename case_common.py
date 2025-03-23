@@ -6,13 +6,6 @@ import requests
 import json
 
 
-url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
-# url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005'
-# url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005'
-"""
-https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005#
-https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=75838512&case_uid=d9fcfb59-8b80-493a-af85-e354b361a998&delo_id=1540005#
-"""
 # url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
 
 
@@ -133,15 +126,47 @@ def build_uid_link(tab_uid_link, link_start):
     return link_start + tab_uid_link
 
 
+def load_cases():
+    with open('case_common.json', 'r', encoding='utf-8') as file:
+        cases = json.load(file)
+    # print(cases)
+    return cases
+
+
+def get_case_links(cases):
+    case_links = []
+    for case in cases['civil_cases']:
+        link = case['case_link']
+        case_links.append(link)
+    return case_links
+
+
+# def write_new_case_data_json(settings):
+#     with open('news_settings.json', 'w', encoding='utf-8') as file:
+#         json.dump(settings, file, indent=4, ensure_ascii=False)
+
+
+
 def main():
-    content = getContent(url)
+    cases = load_cases()
+    # print(cases)
+    case_links = get_case_links(cases)
+    for link in case_links:
+        print(link)
+        url = "link"
+        content = getContent(url)
     
-    if content == None:
+        if content == None:
             print('Content could not be found')
-    else:
+        else:
         #print(content, '\n')
-        link_start = build_link_start(url)
-        get_data_from_content(content, link_start)
+            cases = load_cases()
+        # print(cases)
+        # case_links = get_case_links(cases)
+        # for link in case_links:
+        #     print(link)
+            link_start = build_link_start(url)
+            get_data_from_content(content, link_start)
 
 
 if __name__ == __name__:
