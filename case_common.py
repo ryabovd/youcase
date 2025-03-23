@@ -141,12 +141,6 @@ def get_case_links(cases):
     return case_links
 
 
-# def write_new_case_data_json(settings):
-#     with open('news_settings.json', 'w', encoding='utf-8') as file:
-#         json.dump(settings, file, indent=4, ensure_ascii=False)
-
-
-
 def main():
     cases = load_cases()
     # print(cases)
@@ -155,7 +149,6 @@ def main():
         print(link)
         url = "link"
         content = getContent(url)
-    
         if content == None:
             print('Content could not be found')
         else:
