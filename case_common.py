@@ -3,7 +3,7 @@ from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 import requests
 #import datetime
-#import json
+import json
 
 
 url = 'https://abakansky--hak.sudrf.ru/modules.php?name=sud_delo&srv_num=2&name_op=case&case_id=69831807&case_uid=72d314dc-bc07-4c83-81a6-2fbd94c53c45&delo_id=1540005'
@@ -146,3 +146,6 @@ def main():
 
 if __name__ == __name__:
     main()
+
+
+# Сделать список ссылок на дела, которые нужно мониторить
