@@ -143,11 +143,11 @@ def get_case_links(cases):
 
 def main():
     cases = load_cases()
-    # print(cases)
+    #print(cases)
     case_links = get_case_links(cases)
     for link in case_links:
-        print(link)
-        url = "link"
+        print("Ссылка\n", link)
+        url = link
         content = getContent(url)
         if content == None:
             print('Content could not be found')
@@ -165,5 +165,5 @@ def main():
 if __name__ == __name__:
     main()
 
-
-# Сделать список ссылок на дела, которые нужно мониторить
+# Сделать обработку ошибок, чтобы программа не вылетала при неработащем сайте
+#+ Сделать список ссылок на дела, которые нужно мониторить
