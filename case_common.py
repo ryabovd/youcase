@@ -9,6 +9,7 @@ import time
 import re
 import hashlib
 import os
+import difflib
 from datetime import datetime
 
 # Настройка логирования
@@ -27,6 +28,7 @@ class CaseChangeTracker:
         self.previous_state = self.load_previous_state()
         self.current_state = {}
         self.changes = []
+        self.detailed_changes = []
     
     def load_previous_state(self) -> Dict:
         """Загружает предыдущее состояние из файла"""
@@ -55,96 +57,218 @@ class CaseChangeTracker:
             return hashlib.md5(json.dumps(content, sort_keys=True).encode('utf-8')).hexdigest()
         return ""
     
+    def extract_text_content(self, html_content: str) -> str:
+        """Извлекает чистый текст из HTML для сравнения"""
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            # Удаляем скрипты и стили
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text()
+            # Убираем лишние пробелы и переносы
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            return ' '.join(chunk for chunk in chunks if chunk)
+        except Exception:
+            return html_content
+    
+    def compare_text_content(self, old_text: str, new_text: str) -> List[str]:
+        """Сравнивает текстовое содержимое и возвращает различия"""
+        old_lines = old_text.splitlines()
+        new_lines = new_text.splitlines()
+        
+        diff = difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile='previous', tofile='current',
+            lineterm=''
+        )
+        
+        changes = []
+        for line in diff:
+            if line.startswith('+') and not line.startswith('+++'):
+                changes.append(f"Добавлено: {line[1:].strip()}")
+            elif line.startswith('-') and not line.startswith('---'):
+                changes.append(f"Удалено: {line[1:].strip()}")
+        
+        return changes
+    
     def track_case_changes(self, case_url: str, case_data: Dict) -> List[Dict]:
         """Отслеживает изменения в деле"""
         changes = []
+        detailed_changes = []
         case_key = case_url
+        case_number = case_data.get('case_number', 'N/A')
         
         # Сохраняем текущее состояние
         self.current_state[case_key] = {
             'last_check': datetime.now().isoformat(),
-            'case_number': case_data.get('case_number'),
+            'case_number': case_number,
             'content_hash': self.calculate_content_hash(case_data),
-            'tabs_hashes': {}
+            'tabs_hashes': {},
+            'tabs_content': {}
         }
         
-        # Вычисляем хеши для каждой вкладки
+        # Вычисляем хеши и сохраняем содержимое для каждой вкладки
         for tab_num, tab_data in case_data.get('tabs', {}).items():
-            tab_hash = self.calculate_content_hash(tab_data.get('raw_content', ''))
+            tab_content = tab_data.get('raw_content', '')
+            tab_hash = self.calculate_content_hash(tab_content)
             self.current_state[case_key]['tabs_hashes'][tab_num] = tab_hash
+            self.current_state[case_key]['tabs_content'][tab_num] = tab_content
         
         # Проверяем изменения по сравнению с предыдущим состоянием
         if case_key not in self.previous_state:
-            changes.append({
+            change = {
                 'type': 'new_case',
                 'case_url': case_url,
-                'case_number': case_data.get('case_number'),
+                'case_number': case_number,
                 'timestamp': datetime.now().isoformat(),
-                'message': 'Обнаружено новое дело'
-            })
-            return changes
+                'message': 'Обнаружено новое дело',
+                'details': ['Дело добавлено в мониторинг']
+            }
+            changes.append(change)
+            detailed_changes.append(change)
+            return changes, detailed_changes
         
         prev_state = self.previous_state[case_key]
         
         # Проверяем изменения в основном содержимом
         if prev_state.get('content_hash') != self.current_state[case_key]['content_hash']:
-            changes.append({
+            change = {
                 'type': 'content_changed',
                 'case_url': case_url,
-                'case_number': case_data.get('case_number'),
+                'case_number': case_number,
                 'timestamp': datetime.now().isoformat(),
-                'message': 'Изменено содержимое дела'
-            })
+                'message': 'Изменено содержимое дела',
+                'details': ['Общие изменения в структуре дела']
+            }
+            changes.append(change)
+            detailed_changes.append(change)
         
         # Проверяем изменения в отдельных вкладках
         prev_tabs = prev_state.get('tabs_hashes', {})
+        prev_tabs_content = prev_state.get('tabs_content', {})
         curr_tabs = self.current_state[case_key]['tabs_hashes']
+        curr_tabs_content = self.current_state[case_key]['tabs_content']
         
         # Проверяем новые вкладки
         new_tabs = set(curr_tabs.keys()) - set(prev_tabs.keys())
         for tab_num in new_tabs:
-            changes.append({
+            change = {
                 'type': 'new_tab',
                 'case_url': case_url,
-                'case_number': case_data.get('case_number'),
+                'case_number': case_number,
                 'tab_number': tab_num,
                 'timestamp': datetime.now().isoformat(),
-                'message': f'Добавлена новая вкладка {tab_num}'
-            })
+                'message': f'Добавлена новая вкладка {tab_num}',
+                'details': [f'Вкладка {tab_num}: добавлено новое содержимое']
+            }
+            changes.append(change)
+            detailed_changes.append(change)
         
         # Проверяем удаленные вкладки
         removed_tabs = set(prev_tabs.keys()) - set(curr_tabs.keys())
         for tab_num in removed_tabs:
-            changes.append({
+            change = {
                 'type': 'removed_tab',
                 'case_url': case_url,
-                'case_number': case_data.get('case_number'),
+                'case_number': case_number,
                 'tab_number': tab_num,
                 'timestamp': datetime.now().isoformat(),
-                'message': f'Удалена вкладка {tab_num}'
-            })
+                'message': f'Удалена вкладка {tab_num}',
+                'details': [f'Вкладка {tab_num}: полностью удалена']
+            }
+            changes.append(change)
+            detailed_changes.append(change)
         
         # Проверяем измененные вкладки
         for tab_num in set(prev_tabs.keys()) & set(curr_tabs.keys()):
             if prev_tabs[tab_num] != curr_tabs[tab_num]:
-                changes.append({
+                # Детальное сравнение содержимого вкладки
+                old_content = prev_tabs_content.get(tab_num, '')
+                new_content = curr_tabs_content.get(tab_num, '')
+                
+                # Извлекаем текст для сравнения
+                old_text = self.extract_text_content(old_content)
+                new_text = self.extract_text_content(new_content)
+                
+                # Находим конкретные изменения
+                text_changes = self.compare_text_content(old_text, new_text)
+                
+                change = {
                     'type': 'tab_changed',
                     'case_url': case_url,
-                    'case_number': case_data.get('case_number'),
+                    'case_number': case_number,
                     'tab_number': tab_num,
                     'timestamp': datetime.now().isoformat(),
-                    'message': f'Изменено содержимое вкладки {tab_num}'
-                })
+                    'message': f'Изменено содержимое вкладки {tab_num}',
+                    'details': text_changes if text_changes else ['Содержимое изменено (детали не определены)']
+                }
+                changes.append(change)
+                detailed_changes.append(change)
         
-        return changes
+        # Проверяем изменения в основных полях дела
+        self.check_field_changes(case_url, case_number, case_data, prev_state, detailed_changes)
+        
+        return changes, detailed_changes
     
-    def save_changes_report(self, changes: List[Dict]):
+    def check_field_changes(self, case_url: str, case_number: str, current_data: Dict, 
+                          previous_state: Dict, detailed_changes: List[Dict]):
+        """Проверяет изменения в основных полях дела"""
+        try:
+            # Предполагаем, что предыдущие данные хранятся в previous_state
+            prev_data = previous_state.get('case_data', {})
+            
+            fields_to_check = [
+                'sub_category', 'instance', 'material_number', 
+                'case_number', 'judge', 'date_of_receipt'
+            ]
+            
+            for field in fields_to_check:
+                current_value = current_data.get(field)
+                previous_value = prev_data.get(field)
+                
+                if current_value != previous_value:
+                    change_message = f"Изменено поле '{self.get_field_name(field)}': "
+                    if previous_value is None:
+                        change_message += f"добавлено '{current_value}'"
+                    elif current_value is None:
+                        change_message += f"удалено '{previous_value}'"
+                    else:
+                        change_message += f"с '{previous_value}' на '{current_value}'"
+                    
+                    detailed_changes.append({
+                        'type': 'field_changed',
+                        'case_url': case_url,
+                        'case_number': case_number,
+                        'field': field,
+                        'timestamp': datetime.now().isoformat(),
+                        'message': f'Изменено поле {field}',
+                        'details': [change_message]
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Ошибка при проверке изменений полей: {e}")
+    
+    def get_field_name(self, field: str) -> str:
+        """Возвращает читаемое название поля"""
+        field_names = {
+            'sub_category': 'Категория дела',
+            'instance': 'Инстанция',
+            'material_number': 'Материальный номер',
+            'case_number': 'Номер дела',
+            'judge': 'Судья',
+            'date_of_receipt': 'Дата поступления'
+        }
+        return field_names.get(field, field)
+    
+    def save_changes_report(self, changes: List[Dict], detailed_changes: List[Dict]):
         """Сохраняет отчет об изменениях"""
         if not changes:
             logger.info("Изменений не обнаружено")
             return
         
-        report_file = f'changes_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        # Сохраняем краткий отчет
+        report_file = f'changes_summary_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
         try:
             with open(report_file, 'w', encoding='utf-8') as f:
                 json.dump({
@@ -152,19 +276,64 @@ class CaseChangeTracker:
                     'total_changes': len(changes),
                     'changes': changes
                 }, f, ensure_ascii=False, indent=2)
-            logger.info(f"Отчет об изменениях сохранен в {report_file}")
-            
-            # Также выводим изменения в консоль
-            self.print_changes_summary(changes)
+            logger.info(f"Краткий отчет сохранен в {report_file}")
             
         except IOError as e:
             logger.error(f"Ошибка при сохранении отчета: {e}")
+        
+        # Сохраняем детальный отчет
+        detailed_file = f'changes_detailed_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        try:
+            with open(detailed_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'total_changes': len(detailed_changes),
+                    'detailed_changes': detailed_changes
+                }, f, ensure_ascii=False, indent=2)
+            logger.info(f"Детальный отчет сохранен в {detailed_file}")
+            
+        except IOError as e:
+            logger.error(f"Ошибка при сохранении детального отчета: {e}")
+        
+        # Выводим сводку в консоль
+        self.print_changes_summary(changes, detailed_changes)
     
-    def print_changes_summary(self, changes: List[Dict]):
+    def print_changes_summary(self, changes: List[Dict], detailed_changes: List[Dict]):
         """Выводит сводку изменений в консоль"""
-        print("\n" + "="*60)
-        print("СВОДКА ИЗМЕНЕНИЙ")
-        print("="*60)
+        print("\n" + "="*80)
+        print("ДЕТАЛЬНАЯ СВОДКА ИЗМЕНЕНИЙ В ДЕЛАХ")
+        print("="*80)
+        
+        # Группируем изменения по делам
+        changes_by_case = {}
+        for change in detailed_changes:
+            case_key = change.get('case_number', change.get('case_url', 'unknown'))
+            if case_key not in changes_by_case:
+                changes_by_case[case_key] = []
+            changes_by_case[case_key].append(change)
+        
+        # Выводим изменения для каждого дела
+        for case_key, case_changes in changes_by_case.items():
+            print(f"\n🔍 ДЕЛО: {case_key}")
+            print("-" * 60)
+            
+            for change in case_changes:
+                change_type = change['type']
+                print(f"   📋 {self.get_change_type_name(change_type)}:")
+                
+                # Выводим детали изменений
+                for detail in change.get('details', []):
+                    print(f"      • {detail}")
+                
+                # Для изменений вкладок показываем дополнительную информацию
+                if change_type in ['tab_changed', 'new_tab', 'removed_tab']:
+                    print(f"      Вкладка: {change.get('tab_number')}")
+                
+                print()
+        
+        # Общая статистика
+        print("="*80)
+        print("ОБЩАЯ СТАТИСТИКА:")
         
         change_types = {}
         for change in changes:
@@ -172,22 +341,21 @@ class CaseChangeTracker:
             change_types[change_type] = change_types.get(change_type, 0) + 1
         
         for change_type, count in change_types.items():
-            print(f"{self.get_change_type_name(change_type)}: {count}")
+            print(f"   {self.get_change_type_name(change_type)}: {count}")
         
-        print("\nДетали изменений:")
-        for change in changes:
-            print(f"- {change['message']} (дело: {change.get('case_number', 'N/A')})")
-        
-        print("="*60)
+        print(f"   Всего изменений: {len(detailed_changes)}")
+        print(f"   Затронуто дел: {len(changes_by_case)}")
+        print("="*80)
     
     def get_change_type_name(self, change_type: str) -> str:
         """Возвращает читаемое название типа изменения"""
         names = {
-            'new_case': 'Новые дела',
-            'content_changed': 'Изменения содержимого',
-            'new_tab': 'Новые вкладки',
-            'removed_tab': 'Удаленные вкладки',
-            'tab_changed': 'Измененные вкладки'
+            'new_case': 'НОВОЕ ДЕЛО',
+            'content_changed': 'ИЗМЕНЕНИЕ СОДЕРЖИМОГО',
+            'new_tab': 'НОВАЯ ВКЛАДКА',
+            'removed_tab': 'УДАЛЕНА ВКЛАДКА',
+            'tab_changed': 'ИЗМЕНЕНИЕ ВКЛАДКИ',
+            'field_changed': 'ИЗМЕНЕНИЕ ПОЛЯ'
         }
         return names.get(change_type, change_type)
 
@@ -490,7 +658,7 @@ def save_results(results: List[Dict]):
 def main():
     """Основная функция приложения"""
     try:
-        logger.info("Запуск парсера судебных дел с отслеживанием изменений")
+        logger.info("Запуск парсера судебных дел с детальным отслеживанием изменений")
         
         # Инициализация трекера изменений
         tracker = CaseChangeTracker()
@@ -504,6 +672,7 @@ def main():
         
         results = []
         all_changes = []
+        all_detailed_changes = []
         successful = 0
         
         for i, link in enumerate(case_links, 1):
@@ -523,14 +692,16 @@ def main():
             case_data = parse_case_data(content, base_url)
             
             # Отслеживаем изменения
-            changes = tracker.track_case_changes(link, case_data)
+            changes, detailed_changes = tracker.track_case_changes(link, case_data)
             all_changes.extend(changes)
+            all_detailed_changes.extend(detailed_changes)
             
             result_item = {
                 'url': link,
                 'data': case_data,
                 'success': case_data['parsing_success'],
-                'changes': changes
+                'changes': changes,
+                'detailed_changes': detailed_changes
             }
             
             results.append(result_item)
@@ -542,7 +713,7 @@ def main():
         
         # Сохраняем текущее состояние и отчет об изменениях
         tracker.save_current_state()
-        tracker.save_changes_report(all_changes)
+        tracker.save_changes_report(all_changes, all_detailed_changes)
         
         # Сохраняем полные результаты
         save_results(results)
