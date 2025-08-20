@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set, Any
 from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
 from bs4 import BeautifulSoup
@@ -7,6 +7,9 @@ import requests
 import json
 import time
 import re
+import hashlib
+import os
+from datetime import datetime
 
 # Настройка логирования
 logging.basicConfig(
@@ -16,14 +19,184 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class CaseChangeTracker:
+    """Класс для отслеживания изменений в делах"""
+    
+    def __init__(self, state_file: str = 'case_state.json'):
+        self.state_file = state_file
+        self.previous_state = self.load_previous_state()
+        self.current_state = {}
+        self.changes = []
+    
+    def load_previous_state(self) -> Dict:
+        """Загружает предыдущее состояние из файла"""
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Не удалось загрузить предыдущее состояние: {e}")
+        return {}
+    
+    def save_current_state(self):
+        """Сохраняет текущее состояние в файл"""
+        try:
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(self.current_state, f, ensure_ascii=False, indent=2)
+            logger.info(f"Текущее состояние сохранено в {self.state_file}")
+        except IOError as e:
+            logger.error(f"Ошибка при сохранении состояния: {e}")
+    
+    def calculate_content_hash(self, content: Any) -> str:
+        """Вычисляет хеш содержимого для сравнения"""
+        if isinstance(content, str):
+            return hashlib.md5(content.encode('utf-8')).hexdigest()
+        elif isinstance(content, dict):
+            return hashlib.md5(json.dumps(content, sort_keys=True).encode('utf-8')).hexdigest()
+        return ""
+    
+    def track_case_changes(self, case_url: str, case_data: Dict) -> List[Dict]:
+        """Отслеживает изменения в деле"""
+        changes = []
+        case_key = case_url
+        
+        # Сохраняем текущее состояние
+        self.current_state[case_key] = {
+            'last_check': datetime.now().isoformat(),
+            'case_number': case_data.get('case_number'),
+            'content_hash': self.calculate_content_hash(case_data),
+            'tabs_hashes': {}
+        }
+        
+        # Вычисляем хеши для каждой вкладки
+        for tab_num, tab_data in case_data.get('tabs', {}).items():
+            tab_hash = self.calculate_content_hash(tab_data.get('raw_content', ''))
+            self.current_state[case_key]['tabs_hashes'][tab_num] = tab_hash
+        
+        # Проверяем изменения по сравнению с предыдущим состоянием
+        if case_key not in self.previous_state:
+            changes.append({
+                'type': 'new_case',
+                'case_url': case_url,
+                'case_number': case_data.get('case_number'),
+                'timestamp': datetime.now().isoformat(),
+                'message': 'Обнаружено новое дело'
+            })
+            return changes
+        
+        prev_state = self.previous_state[case_key]
+        
+        # Проверяем изменения в основном содержимом
+        if prev_state.get('content_hash') != self.current_state[case_key]['content_hash']:
+            changes.append({
+                'type': 'content_changed',
+                'case_url': case_url,
+                'case_number': case_data.get('case_number'),
+                'timestamp': datetime.now().isoformat(),
+                'message': 'Изменено содержимое дела'
+            })
+        
+        # Проверяем изменения в отдельных вкладках
+        prev_tabs = prev_state.get('tabs_hashes', {})
+        curr_tabs = self.current_state[case_key]['tabs_hashes']
+        
+        # Проверяем новые вкладки
+        new_tabs = set(curr_tabs.keys()) - set(prev_tabs.keys())
+        for tab_num in new_tabs:
+            changes.append({
+                'type': 'new_tab',
+                'case_url': case_url,
+                'case_number': case_data.get('case_number'),
+                'tab_number': tab_num,
+                'timestamp': datetime.now().isoformat(),
+                'message': f'Добавлена новая вкладка {tab_num}'
+            })
+        
+        # Проверяем удаленные вкладки
+        removed_tabs = set(prev_tabs.keys()) - set(curr_tabs.keys())
+        for tab_num in removed_tabs:
+            changes.append({
+                'type': 'removed_tab',
+                'case_url': case_url,
+                'case_number': case_data.get('case_number'),
+                'tab_number': tab_num,
+                'timestamp': datetime.now().isoformat(),
+                'message': f'Удалена вкладка {tab_num}'
+            })
+        
+        # Проверяем измененные вкладки
+        for tab_num in set(prev_tabs.keys()) & set(curr_tabs.keys()):
+            if prev_tabs[tab_num] != curr_tabs[tab_num]:
+                changes.append({
+                    'type': 'tab_changed',
+                    'case_url': case_url,
+                    'case_number': case_data.get('case_number'),
+                    'tab_number': tab_num,
+                    'timestamp': datetime.now().isoformat(),
+                    'message': f'Изменено содержимое вкладки {tab_num}'
+                })
+        
+        return changes
+    
+    def save_changes_report(self, changes: List[Dict]):
+        """Сохраняет отчет об изменениях"""
+        if not changes:
+            logger.info("Изменений не обнаружено")
+            return
+        
+        report_file = f'changes_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        try:
+            with open(report_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'total_changes': len(changes),
+                    'changes': changes
+                }, f, ensure_ascii=False, indent=2)
+            logger.info(f"Отчет об изменениях сохранен в {report_file}")
+            
+            # Также выводим изменения в консоль
+            self.print_changes_summary(changes)
+            
+        except IOError as e:
+            logger.error(f"Ошибка при сохранении отчета: {e}")
+    
+    def print_changes_summary(self, changes: List[Dict]):
+        """Выводит сводку изменений в консоль"""
+        print("\n" + "="*60)
+        print("СВОДКА ИЗМЕНЕНИЙ")
+        print("="*60)
+        
+        change_types = {}
+        for change in changes:
+            change_type = change['type']
+            change_types[change_type] = change_types.get(change_type, 0) + 1
+        
+        for change_type, count in change_types.items():
+            print(f"{self.get_change_type_name(change_type)}: {count}")
+        
+        print("\nДетали изменений:")
+        for change in changes:
+            print(f"- {change['message']} (дело: {change.get('case_number', 'N/A')})")
+        
+        print("="*60)
+    
+    def get_change_type_name(self, change_type: str) -> str:
+        """Возвращает читаемое название типа изменения"""
+        names = {
+            'new_case': 'Новые дела',
+            'content_changed': 'Изменения содержимого',
+            'new_tab': 'Новые вкладки',
+            'removed_tab': 'Удаленные вкладки',
+            'tab_changed': 'Измененные вкладки'
+        }
+        return names.get(change_type, change_type)
+
 def get_session() -> requests.Session:
     """Создает и возвращает сессию requests"""
     return requests.Session()
 
 def get_content(url: str, max_retries: int = 3) -> Optional[BeautifulSoup]:
-    """
-    Получает контент страницы с обработкой ошибок и повторными попытками
-    """
+    """Получает контент страницы с обработкой ошибок и повторными попытками"""
     session = get_session()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -57,7 +230,7 @@ def get_content(url: str, max_retries: int = 3) -> Optional[BeautifulSoup]:
             if attempt == max_retries - 1:
                 return None
                 
-        time.sleep(2 ** attempt)  # Экспоненциальная задержка
+        time.sleep(2 ** attempt)
         
     return None
 
@@ -104,7 +277,6 @@ def parse_case_number(content: BeautifulSoup) -> Dict:
                 'material_number': material_number
             }
         
-        # Альтернативный парсинг если нет тильды
         if n_pos != -1:
             case_number = text[n_pos+1:].strip()
             return {
@@ -150,7 +322,6 @@ def parse_tab1_case(tab_content: BeautifulSoup, base_url: str) -> Dict:
         # Дата поступления
         date_elem = tab_content.find('b', string='Дата поступления')
         if not date_elem:
-            # Попробуем найти по тексту
             date_elem = tab_content.find('b', string=re.compile(r'Дата поступления', re.IGNORECASE))
         
         if date_elem:
@@ -213,7 +384,8 @@ def parse_all_tabs(content: BeautifulSoup, base_url: str) -> Dict:
             if tab_content:
                 tabs[str(i)] = {
                     'raw_content': str(tab_content),
-                    'parsed_data': parse_tab_content(tab_content, base_url, i)
+                    'parsed_data': parse_tab_content(tab_content, base_url, i),
+                    'parsing_timestamp': datetime.now().isoformat()
                 }
             else:
                 logger.warning(f"Вкладка {tab_id} не найдена")
@@ -231,19 +403,17 @@ def parse_case_data(content: BeautifulSoup, base_url: str) -> Dict:
         'case_number': None,
         'material_number': None,
         'tabs': {},
-        'parsing_timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'parsing_timestamp': datetime.now().isoformat(),
         'parsing_success': False
     }
     
     try:
-        # Основная информация
         title_data = parse_case_title(content)
         case_data.update(title_data)
         
         number_data = parse_case_number(content)
         case_data.update(number_data)
         
-        # Вкладки
         case_data['tabs'] = parse_all_tabs(content, base_url)
         case_data['parsing_success'] = True
         
@@ -303,16 +473,27 @@ def get_case_links(cases: Dict) -> List[str]:
 def save_results(results: List[Dict]):
     """Сохраняет результаты в файл"""
     try:
-        with open('parsed_cases.json', 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        logger.info(f"Результаты сохранены в parsed_cases.json ({len(results)} дел)")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_file = f'parsed_cases_{timestamp}.json'
+        
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                'parsing_timestamp': datetime.now().isoformat(),
+                'total_cases': len(results),
+                'successful_cases': len([r for r in results if r.get('success')]),
+                'cases': results
+            }, f, ensure_ascii=False, indent=2)
+        logger.info(f"Результаты сохранены в {results_file}")
     except Exception as e:
         logger.error(f"Ошибка при сохранении результатов: {e}")
 
 def main():
     """Основная функция приложения"""
     try:
-        logger.info("Запуск парсера судебных дел")
+        logger.info("Запуск парсера судебных дел с отслеживанием изменений")
+        
+        # Инициализация трекера изменений
+        tracker = CaseChangeTracker()
         
         cases = load_cases()
         case_links = get_case_links(cases)
@@ -322,6 +503,7 @@ def main():
             return
         
         results = []
+        all_changes = []
         successful = 0
         
         for i, link in enumerate(case_links, 1):
@@ -340,21 +522,29 @@ def main():
             base_url = build_base_url(link)
             case_data = parse_case_data(content, base_url)
             
+            # Отслеживаем изменения
+            changes = tracker.track_case_changes(link, case_data)
+            all_changes.extend(changes)
+            
             result_item = {
                 'url': link,
                 'data': case_data,
-                'success': case_data['parsing_success']
+                'success': case_data['parsing_success'],
+                'changes': changes
             }
             
             results.append(result_item)
             if case_data['parsing_success']:
                 successful += 1
             
-            # Пауза между запросами
             if i < len(case_links):
                 time.sleep(1)
         
-        # Сохранение результатов
+        # Сохраняем текущее состояние и отчет об изменениях
+        tracker.save_current_state()
+        tracker.save_changes_report(all_changes)
+        
+        # Сохраняем полные результаты
         save_results(results)
         logger.info(f"Обработка завершена. Успешно: {successful}/{len(case_links)} дел")
         
