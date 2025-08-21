@@ -61,11 +61,9 @@ class CaseChangeTracker:
         """Извлекает чистый текст из HTML для сравнения"""
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
-            # Удаляем скрипты и стили
             for script in soup(["script", "style"]):
                 script.decompose()
             text = soup.get_text()
-            # Убираем лишние пробелы и переносы
             lines = (line.strip() for line in text.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             return ' '.join(chunk for chunk in chunks if chunk)
@@ -92,20 +90,21 @@ class CaseChangeTracker:
         
         return changes
     
-    def track_case_changes(self, case_url: str, case_data: Dict) -> List[Dict]:
+    def track_case_changes(self, case_url: str, case_data: Dict) -> Tuple[List[Dict], List[Dict]]:
         """Отслеживает изменения в деле"""
         changes = []
         detailed_changes = []
         case_key = case_url
         case_number = case_data.get('case_number', 'N/A')
         
-        # Сохраняем текущее состояние
+        # Сохраняем текущее состояние ВМЕСТЕ с данными дела для следующего сравнения
         self.current_state[case_key] = {
             'last_check': datetime.now().isoformat(),
             'case_number': case_number,
             'content_hash': self.calculate_content_hash(case_data),
             'tabs_hashes': {},
-            'tabs_content': {}
+            'tabs_content': {},
+            'case_data': case_data  # Сохраняем ВСЕ данные дела для следующего сравнения
         }
         
         # Вычисляем хеши и сохраняем содержимое для каждой вкладки
@@ -131,7 +130,27 @@ class CaseChangeTracker:
         
         prev_state = self.previous_state[case_key]
         
-        # Проверяем изменения в основном содержимом
+        # ПЕРВОЕ: Проверяем изменение номера дела
+        prev_case_number = prev_state.get('case_number')
+        if prev_case_number and case_number != prev_case_number:
+            change = {
+                'type': 'case_number_changed',
+                'case_url': case_url,
+                'previous_case_number': prev_case_number,
+                'current_case_number': case_number,
+                'timestamp': datetime.now().isoformat(),
+                'message': 'Изменен номер дела',
+                'details': [f'Номер дела изменен с "{prev_case_number}" на "{case_number}"']
+            }
+            changes.append(change)
+            detailed_changes.append(change)
+        
+        # ВТОРОЕ: Проверяем изменения в основных полях дела
+        field_changes = self.check_field_changes(case_url, case_number, case_data, prev_state)
+        changes.extend(field_changes)
+        detailed_changes.extend(field_changes)
+        
+        # ТРЕТЬЕ: Проверяем изменения в основном содержимом
         if prev_state.get('content_hash') != self.current_state[case_key]['content_hash']:
             change = {
                 'type': 'content_changed',
@@ -144,7 +163,7 @@ class CaseChangeTracker:
             changes.append(change)
             detailed_changes.append(change)
         
-        # Проверяем изменения в отдельных вкладках
+        # ЧЕТВЕРТОЕ: Проверяем изменения в отдельных вкладках
         prev_tabs = prev_state.get('tabs_hashes', {})
         prev_tabs_content = prev_state.get('tabs_content', {})
         curr_tabs = self.current_state[case_key]['tabs_hashes']
@@ -183,15 +202,12 @@ class CaseChangeTracker:
         # Проверяем измененные вкладки
         for tab_num in set(prev_tabs.keys()) & set(curr_tabs.keys()):
             if prev_tabs[tab_num] != curr_tabs[tab_num]:
-                # Детальное сравнение содержимого вкладки
                 old_content = prev_tabs_content.get(tab_num, '')
                 new_content = curr_tabs_content.get(tab_num, '')
                 
-                # Извлекаем текст для сравнения
                 old_text = self.extract_text_content(old_content)
                 new_text = self.extract_text_content(new_content)
                 
-                # Находим конкретные изменения
                 text_changes = self.compare_text_content(old_text, new_text)
                 
                 change = {
@@ -206,48 +222,59 @@ class CaseChangeTracker:
                 changes.append(change)
                 detailed_changes.append(change)
         
-        # Проверяем изменения в основных полях дела
-        self.check_field_changes(case_url, case_number, case_data, prev_state, detailed_changes)
-        
         return changes, detailed_changes
     
     def check_field_changes(self, case_url: str, case_number: str, current_data: Dict, 
-                          previous_state: Dict, detailed_changes: List[Dict]):
+                          previous_state: Dict) -> List[Dict]:
         """Проверяет изменения в основных полях дела"""
+        field_changes = []
+        
         try:
-            # Предполагаем, что предыдущие данные хранятся в previous_state
+            # Получаем предыдущие данные дела
             prev_data = previous_state.get('case_data', {})
             
             fields_to_check = [
                 'sub_category', 'instance', 'material_number', 
-                'case_number', 'judge', 'date_of_receipt'
+                'judge', 'date_of_receipt', 'result_of_consideration'
             ]
             
             for field in fields_to_check:
                 current_value = current_data.get(field)
                 previous_value = prev_data.get(field)
                 
+                # Проверяем, изменилось ли значение
                 if current_value != previous_value:
-                    change_message = f"Изменено поле '{self.get_field_name(field)}': "
-                    if previous_value is None:
-                        change_message += f"добавлено '{current_value}'"
-                    elif current_value is None:
-                        change_message += f"удалено '{previous_value}'"
-                    else:
-                        change_message += f"с '{previous_value}' на '{current_value}'"
+                    change_message = self.get_field_change_message(field, previous_value, current_value)
                     
-                    detailed_changes.append({
+                    change = {
                         'type': 'field_changed',
                         'case_url': case_url,
                         'case_number': case_number,
                         'field': field,
+                        'previous_value': previous_value,
+                        'current_value': current_value,
                         'timestamp': datetime.now().isoformat(),
-                        'message': f'Изменено поле {field}',
+                        'message': f'Изменено поле {self.get_field_name(field)}',
                         'details': [change_message]
-                    })
+                    }
+                    field_changes.append(change)
                     
         except Exception as e:
             logger.error(f"Ошибка при проверке изменений полей: {e}")
+        
+        return field_changes
+    
+    def get_field_change_message(self, field: str, previous_value: Any, current_value: Any) -> str:
+        """Формирует сообщение об изменении поля"""
+        field_name = self.get_field_name(field)
+        
+        if previous_value is None and current_value is not None:
+            return f"Поле '{field_name}': добавлено значение '{current_value}'"
+        elif current_value is None and previous_value is not None:
+            return f"Поле '{field_name}': удалено значение '{previous_value}'"
+        elif previous_value is not None and current_value is not None:
+            return f"Поле '{field_name}': изменено с '{previous_value}' на '{current_value}'"
+        return f"Поле '{field_name}': неопределенное изменение"
     
     def get_field_name(self, field: str) -> str:
         """Возвращает читаемое название поля"""
@@ -257,7 +284,8 @@ class CaseChangeTracker:
             'material_number': 'Материальный номер',
             'case_number': 'Номер дела',
             'judge': 'Судья',
-            'date_of_receipt': 'Дата поступления'
+            'date_of_receipt': 'Дата поступления',
+            'result_of_consideration': 'Результат рассмотрения'
         }
         return field_names.get(field, field)
     
@@ -325,8 +353,19 @@ class CaseChangeTracker:
                 for detail in change.get('details', []):
                     print(f"      • {detail}")
                 
-                # Для изменений вкладок показываем дополнительную информацию
-                if change_type in ['tab_changed', 'new_tab', 'removed_tab']:
+                # Специальная обработка для изменения номера дела
+                if change_type == 'case_number_changed':
+                    print(f"      Предыдущий номер: {change.get('previous_case_number')}")
+                    print(f"      Текущий номер: {change.get('current_case_number')}")
+                
+                # Для изменений полей показываем значения
+                elif change_type == 'field_changed':
+                    print(f"      Поле: {self.get_field_name(change.get('field'))}")
+                    print(f"      Было: {change.get('previous_value', 'N/A')}")
+                    print(f"      Стало: {change.get('current_value', 'N/A')}")
+                
+                # Для изменений вкладок показываем номер вкладки
+                elif change_type in ['tab_changed', 'new_tab', 'removed_tab']:
                     print(f"      Вкладка: {change.get('tab_number')}")
                 
                 print()
@@ -355,16 +394,16 @@ class CaseChangeTracker:
             'new_tab': 'НОВАЯ ВКЛАДКА',
             'removed_tab': 'УДАЛЕНА ВКЛАДКА',
             'tab_changed': 'ИЗМЕНЕНИЕ ВКЛАДКИ',
-            'field_changed': 'ИЗМЕНЕНИЕ ПОЛЯ'
+            'field_changed': 'ИЗМЕНЕНИЕ ПОЛЯ',
+            'case_number_changed': 'ИЗМЕНЕНИЕ НОМЕРА ДЕЛА'
         }
         return names.get(change_type, change_type)
 
+# Остальные функции без изменений
 def get_session() -> requests.Session:
-    """Создает и возвращает сессию requests"""
     return requests.Session()
 
 def get_content(url: str, max_retries: int = 3) -> Optional[BeautifulSoup]:
-    """Получает контент страницы с обработкой ошибок и повторными попытками"""
     session = get_session()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -403,11 +442,9 @@ def get_content(url: str, max_retries: int = 3) -> Optional[BeautifulSoup]:
     return None
 
 def parse_case_title(content: BeautifulSoup) -> Dict:
-    """Парсит заголовок дела"""
     try:
         title_div = content.find('div', class_='title')
         if not title_div:
-            logger.warning("Заголовок дела не найден")
             return {'sub_category': None, 'instance': None}
             
         category_text = title_div.get_text().strip()
@@ -415,10 +452,7 @@ def parse_case_title(content: BeautifulSoup) -> Dict:
             parts = category_text.split('-', 1)
             sub_category = parts[0].strip()
             instance = parts[1].strip() if len(parts) > 1 else None
-            return {
-                'sub_category': sub_category,
-                'instance': instance
-            }
+            return {'sub_category': sub_category, 'instance': instance}
         return {'sub_category': category_text, 'instance': None}
         
     except Exception as e:
@@ -426,11 +460,9 @@ def parse_case_title(content: BeautifulSoup) -> Dict:
         return {'sub_category': None, 'instance': None}
 
 def parse_case_number(content: BeautifulSoup) -> Dict:
-    """Парсит номер дела"""
     try:
         case_number_div = content.find('div', class_='casenumber')
         if not case_number_div:
-            logger.warning("Номер дела не найден")
             return {'case_number': None, 'material_number': None}
             
         text = case_number_div.get_text().strip()
@@ -440,17 +472,11 @@ def parse_case_number(content: BeautifulSoup) -> Dict:
         if n_pos != -1 and tilda_pos != -1 and tilda_pos > n_pos:
             case_number = text[n_pos+1:tilda_pos].strip()
             material_number = text[tilda_pos+1:].strip()
-            return {
-                'case_number': case_number,
-                'material_number': material_number
-            }
+            return {'case_number': case_number, 'material_number': material_number}
         
         if n_pos != -1:
             case_number = text[n_pos+1:].strip()
-            return {
-                'case_number': case_number,
-                'material_number': None
-            }
+            return {'case_number': case_number, 'material_number': None}
             
         return {'case_number': None, 'material_number': None}
         
@@ -459,52 +485,34 @@ def parse_case_number(content: BeautifulSoup) -> Dict:
         return {'case_number': None, 'material_number': None}
 
 def parse_tab1_case(tab_content: BeautifulSoup, base_url: str) -> Dict:
-    """Парсит первую вкладку с основной информацией"""
     data = {
-        'uid': None,
-        'uid_link': None,
-        'date_of_receipt': None,
-        'category_of_case': None,
-        'judge': None,
-        'date_of_consideration': None,
-        'result_of_consideration': None,
-        'indication_of_consideration': None,
-        'court_composition': None
+        'uid': None, 'uid_link': None, 'date_of_receipt': None, 'category_of_case': None,
+        'judge': None, 'date_of_consideration': None, 'result_of_consideration': None,
+        'indication_of_consideration': None, 'court_composition': None
     }
     
     try:
-        # UID
         uid_elem = tab_content.find('u')
         if uid_elem:
             data['uid'] = uid_elem.get_text().strip()
         
-        # Ссылка UID
         link_elem = tab_content.find('a')
         if link_elem and link_elem.get('href'):
             relative_link = link_elem.get('href')
-            if relative_link.startswith('/'):
-                data['uid_link'] = base_url + relative_link
-            else:
-                data['uid_link'] = relative_link
+            data['uid_link'] = base_url + relative_link if relative_link.startswith('/') else relative_link
         
-        # Дата поступления
-        date_elem = tab_content.find('b', string='Дата поступления')
-        if not date_elem:
-            date_elem = tab_content.find('b', string=re.compile(r'Дата поступления', re.IGNORECASE))
-        
+        date_elem = tab_content.find('b', string=re.compile(r'Дата поступления', re.IGNORECASE))
         if date_elem:
             next_td = date_elem.find_next('td')
             if next_td:
                 data['date_of_receipt'] = next_td.get_text().strip()
         
-        # Судья
         judge_elem = tab_content.find('b', string=re.compile(r'Судья', re.IGNORECASE))
         if judge_elem:
             next_td = judge_elem.find_next('td')
             if next_td:
                 data['judge'] = next_td.get_text().strip()
         
-        # Результат рассмотрения
         result_elem = tab_content.find('b', string=re.compile(r'Результат', re.IGNORECASE))
         if result_elem:
             next_td = result_elem.find_next('td')
@@ -517,7 +525,6 @@ def parse_tab1_case(tab_content: BeautifulSoup, base_url: str) -> Dict:
     return data
 
 def parse_tab_content(tab_content: BeautifulSoup, base_url: str, tab_number: int) -> Dict:
-    """Парсит содержимое конкретной вкладки"""
     try:
         if tab_number == 1:
             return parse_tab1_case(tab_content, base_url)
@@ -533,13 +540,11 @@ def parse_tab_content(tab_content: BeautifulSoup, base_url: str, tab_number: int
         return {'error': str(e)}
 
 def parse_all_tabs(content: BeautifulSoup, base_url: str) -> Dict:
-    """Парсит все вкладки дела"""
     tabs = {}
     
     try:
         tab_list = content.find('ul')
         if not tab_list:
-            logger.warning("Список вкладок не найден")
             return tabs
             
         tab_items = tab_list.find_all('li')
@@ -555,24 +560,16 @@ def parse_all_tabs(content: BeautifulSoup, base_url: str) -> Dict:
                     'parsed_data': parse_tab_content(tab_content, base_url, i),
                     'parsing_timestamp': datetime.now().isoformat()
                 }
-            else:
-                logger.warning(f"Вкладка {tab_id} не найдена")
                 
     except Exception as e:
-        logger.error(f"Ошибка при парсинге вкладок: {e}")
+        logger.error(f"Ошибка при парсинге вкладки: {e}")
         
     return tabs
 
 def parse_case_data(content: BeautifulSoup, base_url: str) -> Dict:
-    """Парсит все данные по делу"""
     case_data = {
-        'sub_category': None,
-        'instance': None,
-        'case_number': None,
-        'material_number': None,
-        'tabs': {},
-        'parsing_timestamp': datetime.now().isoformat(),
-        'parsing_success': False
+        'sub_category': None, 'instance': None, 'case_number': None, 'material_number': None,
+        'tabs': {}, 'parsing_timestamp': datetime.now().isoformat(), 'parsing_success': False
     }
     
     try:
@@ -583,9 +580,17 @@ def parse_case_data(content: BeautifulSoup, base_url: str) -> Dict:
         case_data.update(number_data)
         
         case_data['tabs'] = parse_all_tabs(content, base_url)
-        case_data['parsing_success'] = True
         
-        logger.info(f"Успешно распарсено дело: {case_data.get('case_number')}")
+        # Извлекаем дополнительные поля из первой вкладки
+        if '1' in case_data['tabs']:
+            tab1_data = case_data['tabs']['1']['parsed_data']
+            case_data.update({
+                'judge': tab1_data.get('judge'),
+                'date_of_receipt': tab1_data.get('date_of_receipt'),
+                'result_of_consideration': tab1_data.get('result_of_consideration')
+            })
+        
+        case_data['parsing_success'] = True
         
     except Exception as e:
         logger.error(f"Ошибка при парсинге данных: {e}")
@@ -594,21 +599,17 @@ def parse_case_data(content: BeautifulSoup, base_url: str) -> Dict:
     return case_data
 
 def build_base_url(url: str) -> str:
-    """Извлекает базовый URL"""
     try:
         if '://' in url:
             protocol_end = url.find('://') + 3
             domain_end = url.find('/', protocol_end)
-            if domain_end != -1:
-                return url[:domain_end]
-            return url
+            return url[:domain_end] if domain_end != -1 else url
         return url
     except Exception as e:
         logger.error(f"Ошибка при построении базового URL: {e}")
         return ''
 
 def load_cases() -> Dict:
-    """Загружает дела из JSON файла"""
     try:
         with open('case_common.json', 'r', encoding='utf-8') as file:
             cases = json.load(file)
@@ -617,15 +618,11 @@ def load_cases() -> Dict:
     except FileNotFoundError:
         logger.error("Файл case_common.json не найден")
         return {'civil_cases': []}
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка парсинга JSON: {e}")
-        return {'civil_cases': []}
     except Exception as e:
         logger.error(f"Ошибка при загрузке дел: {e}")
         return {'civil_cases': []}
 
 def get_case_links(cases: Dict) -> List[str]:
-    """Извлекает ссылки на дела"""
     case_links = []
     try:
         for case in cases.get('civil_cases', []):
@@ -635,11 +632,9 @@ def get_case_links(cases: Dict) -> List[str]:
         logger.info(f"Извлечено {len(case_links)} ссылок на дела")
     except Exception as e:
         logger.error(f"Ошибка при извлечении ссылок: {e}")
-    
     return case_links
 
 def save_results(results: List[Dict]):
-    """Сохраняет результаты в файл"""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = f'parsed_cases_{timestamp}.json'
@@ -656,13 +651,10 @@ def save_results(results: List[Dict]):
         logger.error(f"Ошибка при сохранении результатов: {e}")
 
 def main():
-    """Основная функция приложения"""
     try:
         logger.info("Запуск парсера судебных дел с детальным отслеживанием изменений")
         
-        # Инициализация трекера изменений
         tracker = CaseChangeTracker()
-        
         cases = load_cases()
         case_links = get_case_links(cases)
         
@@ -680,28 +672,19 @@ def main():
             
             content = get_content(link)
             if not content:
-                logger.warning(f"Не удалось получить контент для {link}")
-                results.append({
-                    'url': link,
-                    'success': False,
-                    'error': 'Не удалось получить контент'
-                })
+                results.append({'url': link, 'success': False, 'error': 'Не удалось получить контент'})
                 continue
                 
             base_url = build_base_url(link)
             case_data = parse_case_data(content, base_url)
             
-            # Отслеживаем изменения
             changes, detailed_changes = tracker.track_case_changes(link, case_data)
             all_changes.extend(changes)
             all_detailed_changes.extend(detailed_changes)
             
             result_item = {
-                'url': link,
-                'data': case_data,
-                'success': case_data['parsing_success'],
-                'changes': changes,
-                'detailed_changes': detailed_changes
+                'url': link, 'data': case_data, 'success': case_data['parsing_success'],
+                'changes': changes, 'detailed_changes': detailed_changes
             }
             
             results.append(result_item)
@@ -711,12 +694,10 @@ def main():
             if i < len(case_links):
                 time.sleep(1)
         
-        # Сохраняем текущее состояние и отчет об изменениях
         tracker.save_current_state()
         tracker.save_changes_report(all_changes, all_detailed_changes)
-        
-        # Сохраняем полные результаты
         save_results(results)
+        
         logger.info(f"Обработка завершена. Успешно: {successful}/{len(case_links)} дел")
         
     except KeyboardInterrupt:
